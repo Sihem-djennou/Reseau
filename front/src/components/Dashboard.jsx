@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 import Profile from './Profile';
@@ -7,20 +7,29 @@ import ChatArea from './ChatArea';
 
 function Dashboard({ user, setUser }) {
   const [socket, setSocket] = useState(null);
-  const [activeSection, setActiveSection] = useState('chats'); // 'chats', 'profile', 'contacts'
+  const [activeSection, setActiveSection] = useState('chats');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedChat, setSelectedChat] = useState(null);
+  const [selectedContactProfile, setSelectedContactProfile] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [isFullChatMode, setIsFullChatMode] = useState(false);
+  const [showContactProfile, setShowContactProfile] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+      return;
+    }
+
     const newSocket = io('http://localhost:5000', {
-      auth: { token }
+      auth: { token },
+      transports: ['websocket', 'polling']
     });
 
     newSocket.on('connect', () => {
@@ -28,33 +37,42 @@ function Dashboard({ user, setUser }) {
     });
 
     newSocket.on('online-users', (users) => {
-      setOnlineUsers(users);
+      setOnlineUsers(users || []);
     });
 
     newSocket.on('new-message', (message) => {
-      // Update conversations when new message arrives
       loadConversations();
-      if (selectedChat && message.sender_id === selectedChat.id) {
-        // Message will be loaded by ChatArea component
-      }
     });
 
     setSocket(newSocket);
     loadConversations();
 
-    return () => newSocket.close();
+    return () => {
+      if (newSocket) newSocket.close();
+    };
   }, []);
 
   const loadConversations = async () => {
     const token = localStorage.getItem('token');
+    if (!token) return;
+    
     try {
       const response = await fetch('http://localhost:5000/api/conversations', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login');
+        return;
+      }
+      
       const data = await response.json();
-      setConversations(data);
+      setConversations(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading conversations:', error);
+      setConversations([]);
     }
   };
 
@@ -67,9 +85,10 @@ function Dashboard({ user, setUser }) {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         const data = await response.json();
-        setSearchResults(data);
+        setSearchResults(Array.isArray(data) ? data : []);
       } catch (error) {
         console.error('Error searching:', error);
+        setSearchResults([]);
       }
     } else {
       setSearchResults([]);
@@ -77,13 +96,37 @@ function Dashboard({ user, setUser }) {
   };
 
   const handleNewChat = (selectedUser) => {
-    setSelectedChat(selectedUser);
+    handleSelectChat(selectedUser);
     setShowNewChatModal(false);
     setSearchQuery('');
     setSearchResults([]);
   };
 
+  const handleSelectChat = (chat) => {
+    setSelectedChat(chat);
+    setIsFullChatMode(true);
+    setSidebarOpen(false);
+    setShowContactProfile(false);
+  };
+
+  const handleBackToChats = () => {
+    setIsFullChatMode(false);
+    setSelectedChat(null);
+    setShowContactProfile(false);
+  };
+
+  const handleViewProfile = (contact) => {
+    setSelectedContactProfile(contact);
+    setShowContactProfile(true);
+  };
+
+  const handleCloseProfile = () => {
+    setShowContactProfile(false);
+    setSelectedContactProfile(null);
+  };
+
   const handleLogout = () => {
+    if (socket) socket.close();
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     navigate('/login');
@@ -93,6 +136,65 @@ function Dashboard({ user, setUser }) {
     return onlineUsers.some(u => u.userId === userId);
   };
 
+  // Full Chat Mode
+  if (isFullChatMode && selectedChat) {
+    return (
+      <div className="full-chat-mode">
+        <div className="full-chat-header">
+          <button className="back-to-chats-btn" onClick={handleBackToChats}>
+            ← Back
+          </button>
+          <div className="full-chat-contact" onClick={() => handleViewProfile(selectedChat)}>
+            <img src={selectedChat.avatar} alt={selectedChat.username} className="full-chat-avatar" />
+            <div className="full-chat-info">
+              <h3>{selectedChat.username}</h3>
+              <span className={`online-status ${isUserOnline(selectedChat.id) ? 'online' : 'offline'}`}>
+                {isUserOnline(selectedChat.id) ? 'Online' : 'Offline'}
+              </span>
+            </div>
+          </div>
+          <div className="full-chat-actions">
+            <button className="contact-profile-btn" onClick={() => handleViewProfile(selectedChat)}>
+              ℹ️
+            </button>
+          </div>
+        </div>
+        
+        <ChatArea 
+          user={user}
+          selectedUser={selectedChat}
+          socket={socket}
+          onClose={handleBackToChats}
+          onMessageSent={loadConversations}
+          isFullScreen={true}
+        />
+        
+        {/* Contact Profile Modal */}
+        {showContactProfile && selectedContactProfile && (
+          <div className="profile-modal-overlay" onClick={handleCloseProfile}>
+            <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
+              <button className="close-profile-modal" onClick={handleCloseProfile}>×</button>
+              <div className="profile-modal-content">
+                <img src={selectedContactProfile.avatar} alt={selectedContactProfile.username} className="profile-modal-avatar" />
+                <h2>{selectedContactProfile.username}</h2>
+                <p className="profile-modal-bio">{selectedContactProfile.bio || 'No bio yet'}</p>
+                <div className="profile-modal-info">
+                  <div className="info-item">
+                    <span className="info-label">Status:</span>
+                    <span className={`status-dot ${isUserOnline(selectedContactProfile.id) ? 'online' : 'offline'}`}>
+                      {isUserOnline(selectedContactProfile.id) ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Regular Dashboard View
   return (
     <div className="dashboard">
       {/* Sidebar */}
@@ -137,38 +239,42 @@ function Dashboard({ user, setUser }) {
         </button>
       </div>
 
+      {/* Overlay for mobile */}
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>}
+
       {/* Main Content */}
       <div className="main-content">
-        {/* Header */}
         <div className="main-header">
-          <button className="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            ☰
-          </button>
-          <h2>
-            {activeSection === 'chats' && 'Chats'}
-            {activeSection === 'profile' && 'Profile'}
-            {activeSection === 'contacts' && 'Contacts'}
-          </h2>
-        </div>
-
-        {/* Content */}
+  <button className="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+    ☰
+  </button>
+  {(activeSection === 'profile' || activeSection === 'contacts') && (
+    <button className="back-button" onClick={() => setActiveSection('chats')}>
+      ←
+    </button>
+  )}
+  <h2>
+    {activeSection === 'chats' && 'Chats'}
+    {activeSection === 'profile' && 'Profile'}
+    {activeSection === 'contacts' && 'Contacts'}
+  </h2>
+</div>
         <div className="content-area">
           {activeSection === 'profile' && (
             <Profile user={user} setUser={setUser} />
           )}
 
           {activeSection === 'contacts' && (
-            <Contacts user={user} socket={socket} />
+            <Contacts user={user} socket={socket} onViewProfile={handleViewProfile} />
           )}
 
           {activeSection === 'chats' && (
             <div className="chats-section">
-              {/* Search Bar and New Chat Button */}
               <div className="chats-header">
                 <div className="search-bar">
                   <input
                     type="text"
-                    placeholder="🔍 Search chats or users..."
+                    placeholder="🔍 Search users..."
                     value={searchQuery}
                     onChange={(e) => handleSearch(e.target.value)}
                   />
@@ -180,7 +286,6 @@ function Dashboard({ user, setUser }) {
                   </button>
                 </div>
 
-                {/* Search Results */}
                 {searchResults.length > 0 && (
                   <div className="search-results-dropdown">
                     {searchResults.map(u => (
@@ -196,36 +301,35 @@ function Dashboard({ user, setUser }) {
                 )}
               </div>
 
-              {/* Conversations List */}
               <div className="conversations-list">
-                {conversations.map(conv => (
-                  <div
-                    key={conv.id}
-                    className={`conversation-item ${selectedChat?.id === conv.id ? 'active' : ''}`}
-                    onClick={() => setSelectedChat(conv)}
-                  >
-                    <img src={conv.avatar} alt={conv.username} className="avatar" />
-                    <div className="conversation-info">
-                      <div className="conversation-name">
-                        {conv.username}
-                        {isUserOnline(conv.id) && <span className="online-dot"></span>}
-                      </div>
-                      <div className="last-message">{conv.last_message || 'No messages yet'}</div>
-                      {conv.unread_count > 0 && (
-                        <span className="unread-badge">{conv.unread_count}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {conversations.length === 0 && (
+                {conversations.length === 0 ? (
                   <div className="no-conversations">
                     <p>No chats yet</p>
                     <p>Click + New Chat to start messaging!</p>
                   </div>
+                ) : (
+                  conversations.map(conv => (
+                    <div
+                      key={conv.id}
+                      className="conversation-item"
+                      onClick={() => handleSelectChat(conv)}
+                    >
+                      <img src={conv.avatar} alt={conv.username} className="avatar" />
+                      <div className="conversation-info">
+                        <div className="conversation-name">
+                          {conv.username}
+                          {isUserOnline(conv.id) && <span className="online-dot"></span>}
+                        </div>
+                        <div className="last-message">{conv.last_message || 'No messages yet'}</div>
+                        {conv.unread_count > 0 && (
+                          <span className="unread-badge">{conv.unread_count}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
 
-              {/* New Chat Modal */}
               {showNewChatModal && (
                 <div className="modal-overlay" onClick={() => setShowNewChatModal(false)}>
                   <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -263,17 +367,6 @@ function Dashboard({ user, setUser }) {
           )}
         </div>
       </div>
-
-      {/* Chat Area - Only show when a chat is selected */}
-      {selectedChat && activeSection === 'chats' && (
-        <ChatArea 
-          user={user}
-          selectedUser={selectedChat}
-          socket={socket}
-          onClose={() => setSelectedChat(null)}
-          onMessageSent={loadConversations}
-        />
-      )}
     </div>
   );
 }

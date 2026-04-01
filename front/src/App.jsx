@@ -8,15 +8,35 @@ import './App.css';
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
+    
+    console.log('App loading - Token exists:', !!token);
+    console.log('App loading - User data exists:', !!userData);
+    
     if (token && userData) {
-      setIsAuthenticated(true);
-      setUser(JSON.parse(userData));
+      try {
+        const parsedUser = JSON.parse(userData);
+        setIsAuthenticated(true);
+        setUser(parsedUser);
+        console.log('User authenticated:', parsedUser.username);
+      } catch (e) {
+        console.error('Error parsing user data:', e);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    } else {
+      console.log('No token found, user not authenticated');
     }
+    setLoading(false);
   }, []);
+
+  if (loading) {
+    return <div className="loading-screen">Loading...</div>;
+  }
 
   return (
     <Router>
