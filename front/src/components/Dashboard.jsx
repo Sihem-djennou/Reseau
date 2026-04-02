@@ -1,23 +1,40 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { 
+  faComments, 
+  faUser, 
+  faAddressBook, 
+  faSignOutAlt, 
+  faPlus, 
+  faSearch,
+  faTimes,
+  faPaperPlane,
+  faInfoCircle,
+  faArrowLeft,
+  faBars
+} from '@fortawesome/free-solid-svg-icons';
 import Profile from './Profile';
 import Contacts from './Contacts';
-import ChatArea from './ChatArea';
 
 function Dashboard({ user, setUser }) {
   const [socket, setSocket] = useState(null);
   const [activeSection, setActiveSection] = useState('chats');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedChat, setSelectedChat] = useState(null);
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [showContactProfileModal, setShowContactProfileModal] = useState(false);
   const [selectedContactProfile, setSelectedContactProfile] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [isFullChatMode, setIsFullChatMode] = useState(false);
-  const [showContactProfile, setShowContactProfile] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [typing, setTyping] = useState(false);
+  const [otherUserTyping, setOtherUserTyping] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -42,6 +59,21 @@ function Dashboard({ user, setUser }) {
 
     newSocket.on('new-message', (message) => {
       loadConversations();
+      if (selectedChat && message.sender_id === selectedChat.id) {
+        loadMessages(selectedChat.id);
+      }
+    });
+
+    newSocket.on('user-typing', (data) => {
+      if (selectedChat && data.userId === selectedChat.id) {
+        setOtherUserTyping(true);
+      }
+    });
+
+    newSocket.on('user-stop-typing', (data) => {
+      if (selectedChat && data.userId === selectedChat.id) {
+        setOtherUserTyping(false);
+      }
     });
 
     setSocket(newSocket);
@@ -76,6 +108,20 @@ function Dashboard({ user, setUser }) {
     }
   };
 
+  const loadMessages = async (userId) => {
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`http://localhost:5000/api/messages/${userId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      setMessages(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error loading messages:', error);
+      setMessages([]);
+    }
+  };
+
   const handleSearch = async (query) => {
     setSearchQuery(query);
     if (query.length > 1) {
@@ -96,105 +142,100 @@ function Dashboard({ user, setUser }) {
   };
 
   const handleNewChat = (selectedUser) => {
-    handleSelectChat(selectedUser);
+    handleOpenChat(selectedUser);
     setShowNewChatModal(false);
     setSearchQuery('');
     setSearchResults([]);
   };
 
-  const handleSelectChat = (chat) => {
+  const handleOpenChat = async (chat) => {
     setSelectedChat(chat);
-    setIsFullChatMode(true);
+    await loadMessages(chat.id);
+    setShowChatModal(true);
     setSidebarOpen(false);
-    setShowContactProfile(false);
   };
 
-  const handleBackToChats = () => {
-    setIsFullChatMode(false);
+  const handleCloseChatModal = () => {
+    setShowChatModal(false);
     setSelectedChat(null);
-    setShowContactProfile(false);
+    setMessages([]);
+    setNewMessage('');
+    setOtherUserTyping(false);
   };
 
   const handleViewProfile = (contact) => {
     setSelectedContactProfile(contact);
-    setShowContactProfile(true);
+    setShowContactProfileModal(true);
   };
 
-  const handleCloseProfile = () => {
-    setShowContactProfile(false);
+  const handleCloseProfileModal = () => {
+    setShowContactProfileModal(false);
     setSelectedContactProfile(null);
   };
 
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !socket || !selectedChat) return;
+
+    socket.emit('private-message', {
+      receiverId: selectedChat.id,
+      message: newMessage
+    });
+
+    const tempMessage = {
+      id: Date.now(),
+      sender_id: user.id,
+      receiver_id: selectedChat.id,
+      message: newMessage,
+      created_at: new Date().toISOString(),
+      is_read: 0
+    };
+    setMessages(prev => [...prev, tempMessage]);
+    setNewMessage('');
+    handleStopTyping();
+    
+    setTimeout(() => {
+      const messagesContainer = document.querySelector('.chat-modal-messages');
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    }, 100);
+  };
+
+  const handleTyping = () => {
+    if (!typing && selectedChat) {
+      setTyping(true);
+      socket.emit('typing', { receiverId: selectedChat.id });
+    }
+
+    if (window.typingTimeout) clearTimeout(window.typingTimeout);
+    window.typingTimeout = setTimeout(() => {
+      handleStopTyping();
+    }, 1000);
+  };
+
+  const handleStopTyping = () => {
+    if (typing && selectedChat) {
+      setTyping(false);
+      socket.emit('stop-typing', { receiverId: selectedChat.id });
+    }
+  };
+
   const handleLogout = () => {
-    if (socket) socket.close();
+    if (socket) {
+      socket.disconnect();
+      socket.close();
+    }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    navigate('/login');
+    // Force navigation to login
+    window.location.href = '/login';
   };
 
   const isUserOnline = (userId) => {
     return onlineUsers.some(u => u.userId === userId);
   };
 
-  // Full Chat Mode
-  if (isFullChatMode && selectedChat) {
-    return (
-      <div className="full-chat-mode">
-        <div className="full-chat-header">
-          <button className="back-to-chats-btn" onClick={handleBackToChats}>
-            ← Back
-          </button>
-          <div className="full-chat-contact" onClick={() => handleViewProfile(selectedChat)}>
-            <img src={selectedChat.avatar} alt={selectedChat.username} className="full-chat-avatar" />
-            <div className="full-chat-info">
-              <h3>{selectedChat.username}</h3>
-              <span className={`online-status ${isUserOnline(selectedChat.id) ? 'online' : 'offline'}`}>
-                {isUserOnline(selectedChat.id) ? 'Online' : 'Offline'}
-              </span>
-            </div>
-          </div>
-          <div className="full-chat-actions">
-            <button className="contact-profile-btn" onClick={() => handleViewProfile(selectedChat)}>
-              ℹ️
-            </button>
-          </div>
-        </div>
-        
-        <ChatArea 
-          user={user}
-          selectedUser={selectedChat}
-          socket={socket}
-          onClose={handleBackToChats}
-          onMessageSent={loadConversations}
-          isFullScreen={true}
-        />
-        
-        {/* Contact Profile Modal */}
-        {showContactProfile && selectedContactProfile && (
-          <div className="profile-modal-overlay" onClick={handleCloseProfile}>
-            <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
-              <button className="close-profile-modal" onClick={handleCloseProfile}>×</button>
-              <div className="profile-modal-content">
-                <img src={selectedContactProfile.avatar} alt={selectedContactProfile.username} className="profile-modal-avatar" />
-                <h2>{selectedContactProfile.username}</h2>
-                <p className="profile-modal-bio">{selectedContactProfile.bio || 'No bio yet'}</p>
-                <div className="profile-modal-info">
-                  <div className="info-item">
-                    <span className="info-label">Status:</span>
-                    <span className={`status-dot ${isUserOnline(selectedContactProfile.id) ? 'online' : 'offline'}`}>
-                      {isUserOnline(selectedContactProfile.id) ? 'Online' : 'Offline'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Regular Dashboard View
   return (
     <div className="dashboard">
       {/* Sidebar */}
@@ -212,7 +253,8 @@ function Dashboard({ user, setUser }) {
               setSidebarOpen(false);
             }}
           >
-            💬 Chats
+            <FontAwesomeIcon icon={faComments} className="menu-icon" />
+            Chats
           </button>
           <button 
             className={`menu-item ${activeSection === 'profile' ? 'active' : ''}`}
@@ -221,7 +263,8 @@ function Dashboard({ user, setUser }) {
               setSidebarOpen(false);
             }}
           >
-            👤 Profile
+            <FontAwesomeIcon icon={faUser} className="menu-icon" />
+            Profile
           </button>
           <button 
             className={`menu-item ${activeSection === 'contacts' ? 'active' : ''}`}
@@ -230,35 +273,33 @@ function Dashboard({ user, setUser }) {
               setSidebarOpen(false);
             }}
           >
-            📞 Contacts
+            <FontAwesomeIcon icon={faAddressBook} className="menu-icon" />
+            Contacts
           </button>
         </div>
 
         <button onClick={handleLogout} className="logout-button">
-          🚪 Logout
+          <FontAwesomeIcon icon={faSignOutAlt} className="logout-icon" />
+          Logout
         </button>
       </div>
 
-      {/* Overlay for mobile */}
+      {/* Overlay for sidebar */}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>}
 
       {/* Main Content */}
       <div className="main-content">
         <div className="main-header">
-  <button className="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
-    ☰
-  </button>
-  {(activeSection === 'profile' || activeSection === 'contacts') && (
-    <button className="back-button" onClick={() => setActiveSection('chats')}>
-      ←
-    </button>
-  )}
-  <h2>
-    {activeSection === 'chats' && 'Chats'}
-    {activeSection === 'profile' && 'Profile'}
-    {activeSection === 'contacts' && 'Contacts'}
-  </h2>
-</div>
+          <button className="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            <FontAwesomeIcon icon={faBars} />
+          </button>
+          <h2>
+            {activeSection === 'chats' && 'Chats'}
+            {activeSection === 'profile' && 'Profile'}
+            {activeSection === 'contacts' && 'Contacts'}
+          </h2>
+        </div>
+
         <div className="content-area">
           {activeSection === 'profile' && (
             <Profile user={user} setUser={setUser} />
@@ -274,7 +315,7 @@ function Dashboard({ user, setUser }) {
                 <div className="search-bar">
                   <input
                     type="text"
-                    placeholder="🔍 Search users..."
+                    placeholder="Search users..."
                     value={searchQuery}
                     onChange={(e) => handleSearch(e.target.value)}
                   />
@@ -282,7 +323,7 @@ function Dashboard({ user, setUser }) {
                     className="new-chat-btn"
                     onClick={() => setShowNewChatModal(true)}
                   >
-                    + New Chat
+                    <FontAwesomeIcon icon={faPlus} /> New Chat
                   </button>
                 </div>
 
@@ -312,7 +353,7 @@ function Dashboard({ user, setUser }) {
                     <div
                       key={conv.id}
                       className="conversation-item"
-                      onClick={() => handleSelectChat(conv)}
+                      onClick={() => handleOpenChat(conv)}
                     >
                       <img src={conv.avatar} alt={conv.username} className="avatar" />
                       <div className="conversation-info">
@@ -330,12 +371,15 @@ function Dashboard({ user, setUser }) {
                 )}
               </div>
 
+              {/* New Chat Modal */}
               {showNewChatModal && (
                 <div className="modal-overlay" onClick={() => setShowNewChatModal(false)}>
                   <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                     <div className="modal-header">
                       <h3>New Chat</h3>
-                      <button className="close-btn" onClick={() => setShowNewChatModal(false)}>×</button>
+                      <button className="close-btn" onClick={() => setShowNewChatModal(false)}>
+                        <FontAwesomeIcon icon={faTimes} />
+                      </button>
                     </div>
                     <div className="modal-body">
                       <input
@@ -367,6 +411,86 @@ function Dashboard({ user, setUser }) {
           )}
         </div>
       </div>
+
+      {/* Chat Modal */}
+      {showChatModal && selectedChat && (
+        <div className="modal-overlay" onClick={handleCloseChatModal}>
+          <div className="chat-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="chat-modal-header">
+              <div className="chat-modal-user" onClick={() => handleViewProfile(selectedChat)}>
+                <img src={selectedChat.avatar} alt={selectedChat.username} className="chat-modal-avatar" />
+                <div className="chat-modal-info">
+                  <h3>{selectedChat.username}</h3>
+                  <span className={`online-status ${isUserOnline(selectedChat.id) ? 'online' : 'offline'}`}>
+                    {isUserOnline(selectedChat.id) ? 'Online' : 'Offline'}
+                  </span>
+                </div>
+              </div>
+              <button className="close-modal-btn" onClick={handleCloseChatModal}>
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            </div>
+
+            <div className="chat-modal-messages">
+              {messages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`chat-message ${msg.sender_id === user.id ? 'sent' : 'received'}`}
+                >
+                  <div className="chat-message-text">{msg.message}</div>
+                  <div className="chat-message-time">
+                    {new Date(msg.created_at).toLocaleTimeString()}
+                  </div>
+                </div>
+              ))}
+              {otherUserTyping && (
+                <div className="typing-indicator">
+                  {selectedChat.username} is typing...
+                </div>
+              )}
+            </div>
+
+            <form className="chat-modal-input" onSubmit={handleSendMessage}>
+              <input
+                type="text"
+                placeholder="Type a message..."
+                value={newMessage}
+                onChange={(e) => {
+                  setNewMessage(e.target.value);
+                  handleTyping();
+                }}
+              />
+              <button type="submit">
+                <FontAwesomeIcon icon={faPaperPlane} /> Send
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Contact Profile Modal */}
+      {showContactProfileModal && selectedContactProfile && (
+        <div className="modal-overlay" onClick={handleCloseProfileModal}>
+          <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="close-profile-modal" onClick={handleCloseProfileModal}>
+              <FontAwesomeIcon icon={faTimes} />
+            </button>
+            <div className="profile-modal-content">
+              <img src={selectedContactProfile.avatar} alt={selectedContactProfile.username} className="profile-modal-avatar" />
+              <h2>{selectedContactProfile.username}</h2>
+              <p className="profile-modal-bio">{selectedContactProfile.bio || 'No bio yet'}</p>
+              <div className="profile-modal-info">
+                <div className="info-item">
+                  <span className="info-label">Status:</span>
+                  <span className={`status-dot ${isUserOnline(selectedContactProfile.id) ? 'online' : 'offline'}`}>
+                    {isUserOnline(selectedContactProfile.id) ? 'Online' : 'Offline'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
