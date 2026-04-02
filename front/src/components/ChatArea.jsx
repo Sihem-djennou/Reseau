@@ -140,6 +140,7 @@ function ChatArea({ user, selectedUser, socket, onClose, onMessageSent }) {
           }}
         />
         <button type="submit">Send</button>
+        <button type="submit">clear</button>
       </form>
     </div>
   );

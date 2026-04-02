@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
+import CryptoJS from 'crypto-js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { 
   faComments, 
@@ -36,7 +37,19 @@ function Dashboard({ user, setUser }) {
   const [typing, setTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState(false);
   const navigate = useNavigate();
-
+const AES_SECRET_KEY = "1234567890123456"; 
+const encryptMessage = (message) => {
+  return CryptoJS.AES.encrypt(message, AES_SECRET_KEY).toString();
+};
+const decryptMessage = (encryptedMessage) => {
+  try {
+    const bytes = CryptoJS.AES.decrypt(encryptedMessage, AES_SECRET_KEY);
+    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+    return decrypted || encryptedMessage;
+  } catch (error) {
+    return encryptedMessage;
+  }
+};
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -173,34 +186,45 @@ function Dashboard({ user, setUser }) {
     setSelectedContactProfile(null);
   };
 
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !socket || !selectedChat) return;
+  const sendMessage = (messageToSend) => {
+  if (!messageToSend.trim() || !socket || !selectedChat) return;
 
-    socket.emit('private-message', {
-      receiverId: selectedChat.id,
-      message: newMessage
-    });
+  socket.emit('private-message', {
+    receiverId: selectedChat.id,
+    message: messageToSend
+  });
 
-    const tempMessage = {
-      id: Date.now(),
-      sender_id: user.id,
-      receiver_id: selectedChat.id,
-      message: newMessage,
-      created_at: new Date().toISOString(),
-      is_read: 0
-    };
-    setMessages(prev => [...prev, tempMessage]);
-    setNewMessage('');
-    handleStopTyping();
-    
-    setTimeout(() => {
-      const messagesContainer = document.querySelector('.chat-modal-messages');
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      }
-    }, 100);
+  const tempMessage = {
+    id: Date.now(),
+    sender_id: user.id,
+    receiver_id: selectedChat.id,
+    message: messageToSend,
+    created_at: new Date().toISOString(),
+    is_read: 0
   };
+
+  setMessages(prev => [...prev, tempMessage]);
+  setNewMessage('');
+  handleStopTyping();
+
+  setTimeout(() => {
+    const messagesContainer = document.querySelector('.chat-modal-messages');
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }, 100);
+};
+
+const handleSendMessage = (e) => {
+  e.preventDefault();
+  sendMessage(newMessage); // message normal
+};
+const handleEncryptAndSend = () => {
+  if (!newMessage.trim()) return;
+
+  const encrypted = encryptMessage(newMessage);
+  sendMessage(encrypted);
+};
 
   const handleTyping = () => {
     if (!typing && selectedChat) {
@@ -437,7 +461,7 @@ function Dashboard({ user, setUser }) {
                   key={idx}
                   className={`chat-message ${msg.sender_id === user.id ? 'sent' : 'received'}`}
                 >
-                  <div className="chat-message-text">{msg.message}</div>
+<div className="chat-message-text">{decryptMessage(msg.message)}</div>
                   <div className="chat-message-time">
                     {new Date(msg.created_at).toLocaleTimeString()}
                   </div>
@@ -463,6 +487,12 @@ function Dashboard({ user, setUser }) {
               <button type="submit">
                 <FontAwesomeIcon icon={faPaperPlane} /> Send
               </button>
+             <button
+  type="button"
+  onClick={handleEncryptAndSend}
+>
+  Chiffrer
+</button>
             </form>
           </div>
         </div>
